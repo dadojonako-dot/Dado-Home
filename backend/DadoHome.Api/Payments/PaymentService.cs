@@ -1,0 +1,9 @@
+using System.Security.Cryptography;
+using System.Text;
+using DadoHome.Api.Data;
+using Microsoft.EntityFrameworkCore;
+namespace DadoHome.Api.Payments;
+public record PaymentIntentRequest(Guid OrderId,string Method);
+public record PaymentWebhook(string EventId,Guid PaymentId,string Status,string ProviderTransactionId);
+public record RefundRequest(Guid PaymentId,decimal Amount,string Reason);
+public class PaymentService(DadoDbContext db,IConfiguration cfg){public async Task<Payment> CreateIntent(Guid customerId,PaymentIntentRequest r){var order=await db.Orders.SingleAsync(x=>x.Id==r.OrderId&&x.CustomerId==customerId);var p=new Payment{Id=Guid.NewGuid(),OrderId=order.Id,CustomerId=customerId,Amount=order.Total,Method=r.Method,Status="Pending",Provider="TBD",CreatedAt=DateTime.UtcNow};db.Payments.Add(p);await db.SaveChangesAsync();return p;}public bool VerifyWebhook(string body,string signature){var secret=cfg["Payments:WebhookSecret"]??"";if(string.IsNullOrEmpty(secret))return false;var hash=HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret),Encoding.UTF8.GetBytes(body));return CryptographicOperations.FixedTimeEquals(hash,Convert.FromHexString(signature));}public async Task<bool> ApplyWebhook(PaymentWebhook e){if(await db.PaymentEvents.AnyAsync(x=>x.EventId==e.EventId))return true;var p=await db.Payments.SingleOrDefaultAsync(x=>x.Id==e.PaymentId);if(p is null)return false;db.PaymentEvents.Add(new PaymentEvent{Id=Guid.NewGuid(),EventId=e.EventId,PaymentId=p.Id,Status=e.Status,CreatedAt=DateTime.UtcNow});p.ProviderTransactionId=e.ProviderTransactionId;p.Status=e.Status;if(e.Status=="Successful"){var order=await db.Orders.SingleAsync(x=>x.Id==p.OrderId);order.Status="Paid";}await db.SaveChangesAsync();return true;}public async Task<decimal> WalletBalance(Guid customerId){var w=await db.Wallets.SingleAsync(x=>x.CustomerId==customerId);return await db.WalletEntries.Where(x=>x.WalletId==w.Id&&x.Status=="Successful").SumAsync(x=>x.Amount);} }
