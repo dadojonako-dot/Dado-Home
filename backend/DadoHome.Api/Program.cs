@@ -1,16 +1,21 @@
+using System.Text;
+using DadoHome.Api.Auth;
 using DadoHome.Api.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-
+using Microsoft.IdentityModel.Tokens;
 var builder=WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<DadoDbContext>(o=>o.UseNpgsql(builder.Configuration.GetConnectionString("DadoDb")));
-builder.Services.AddEndpointsApiExplorer();builder.Services.AddSwaggerGen();
-var app=builder.Build();app.UseSwagger();app.UseSwaggerUI();app.UseHttpsRedirection();
-
+builder.Services.AddSingleton<OtpService>();builder.Services.AddSingleton<JwtService>();builder.Services.AddEndpointsApiExplorer();builder.Services.AddSwaggerGen();
+var key=Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]??throw new InvalidOperationException("Jwt:Key missing"));builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o=>o.TokenValidationParameters=new TokenValidationParameters{ValidateIssuer=true,ValidateAudience=true,ValidateLifetime=true,ValidateIssuerSigningKey=true,ValidIssuer=builder.Configuration["Jwt:Issuer"],ValidAudience=builder.Configuration["Jwt:Audience"],IssuerSigningKey=new SymmetricSecurityKey(key)});builder.Services.AddAuthorization();
+var app=builder.Build();app.UseSwagger();app.UseSwaggerUI();app.UseHttpsRedirection();app.UseAuthentication();app.UseAuthorization();
 app.MapGet("/health",()=>Results.Ok(new{service="DadoHome.Api",status="ok"}));
+app.MapPost("/api/auth/otp/request",(OtpRequest r,OtpService otp,IHostEnvironment env)=>{if(string.IsNullOrWhiteSpace(r.Phone))return Results.BadRequest();var code=otp.Issue(r.Phone);return Results.Ok(env.IsDevelopment()?new{sent=true,devCode=code}:new{sent=true});});
+app.MapPost("/api/auth/otp/verify",async(OtpVerify r,OtpService otp,JwtService jwt,DadoDbContext db)=>{if(!otp.Verify(r.Phone,r.Code))return Results.Unauthorized();var user=await db.Customers.FirstOrDefaultAsync(x=>x.Phone==r.Phone);if(user is null){user=new Customer{Id=Guid.NewGuid(),Phone=r.Phone};db.Customers.Add(user);db.Wallets.Add(new Wallet{Id=Guid.NewGuid(),CustomerId=user.Id});await db.SaveChangesAsync();}return Results.Ok(new{accessToken=jwt.Create(user.Id,user.Phone,Roles.Customer),expiresIn=1800});});
 app.MapGet("/api/products",async(DadoDbContext db)=>await db.Products.Where(x=>x.IsActive).ToListAsync());
-app.MapPost("/api/products",async(Product p,DadoDbContext db)=>{p.Id=Guid.NewGuid();p.CreatedAt=DateTime.UtcNow;db.Products.Add(p);await db.SaveChangesAsync();return Results.Created($"/api/products/{p.Id}",p);});
-app.MapGet("/api/orders",async(DadoDbContext db)=>await db.Orders.OrderByDescending(x=>x.CreatedAt).ToListAsync());
-app.MapGet("/api/customers",async(DadoDbContext db)=>await db.Customers.ToListAsync());
-app.MapGet("/api/wallets/{customerId:guid}",async(Guid customerId,DadoDbContext db)=>await db.Wallets.FirstOrDefaultAsync(x=>x.CustomerId==customerId) is {} w?Results.Ok(w):Results.NotFound());
-app.MapGet("/api/audit",async(DadoDbContext db)=>await db.AuditLogs.OrderByDescending(x=>x.CreatedAt).Take(200).ToListAsync());
+app.MapPost("/api/products",async(Product p,DadoDbContext db)=>{p.Id=Guid.NewGuid();db.Products.Add(p);await db.SaveChangesAsync();return Results.Created($"/api/products/{p.Id}",p);}).RequireAuthorization(p=>p.RequireRole(Roles.Administrator));
+app.MapGet("/api/orders",async(DadoDbContext db)=>await db.Orders.OrderByDescending(x=>x.CreatedAt).ToListAsync()).RequireAuthorization(p=>p.RequireRole(Roles.Administrator,Roles.OrderManager,Roles.Finance,Roles.Support));
+app.MapGet("/api/customers",async(DadoDbContext db)=>await db.Customers.ToListAsync()).RequireAuthorization(p=>p.RequireRole(Roles.Administrator,Roles.OrderManager,Roles.Support));
+app.MapGet("/api/wallets/{customerId:guid}",async(Guid customerId,DadoDbContext db)=>await db.Wallets.FirstOrDefaultAsync(x=>x.CustomerId==customerId) is {} w?Results.Ok(w):Results.NotFound()).RequireAuthorization(p=>p.RequireRole(Roles.Administrator,Roles.Finance,Roles.Support));
+app.MapGet("/api/audit",async(DadoDbContext db)=>await db.AuditLogs.OrderByDescending(x=>x.CreatedAt).Take(200).ToListAsync()).RequireAuthorization(p=>p.RequireRole(Roles.Administrator));
 app.Run();
