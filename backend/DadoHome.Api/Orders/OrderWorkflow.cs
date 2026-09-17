@@ -13,11 +13,21 @@ public static class OrderWorkflow{
   ["Completed"]=[],["Cancelled"]=[]};
  public static void MapOrderWorkflow(this WebApplication app){
   app.MapPut("/api/admin/orders/{id:guid}/status",async(Guid id,OrderStatusRequest r,ClaimsPrincipal user,DadoDbContext db)=>{
+   await using var tx=await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
    var order=await db.Orders.SingleOrDefaultAsync(x=>x.Id==id);if(order is null)return Results.NotFound();
    if(!Allowed.TryGetValue(order.Status,out var next)||!next.Contains(r.Status,StringComparer.OrdinalIgnoreCase))return Results.Conflict(new{error="InvalidStatusTransition",current=order.Status,allowed=next??[]});
-   var old=order.Status;order.Status=r.Status;
-   db.AuditLogs.Add(new AuditLog{Id=Guid.NewGuid(),ActorId=user.FindFirstValue(ClaimTypes.NameIdentifier)??user.FindFirstValue("sub")??"staff",Role=user.FindFirstValue(ClaimTypes.Role)??"",Action=$"ORDER_STATUS_{old}_TO_{r.Status}",Entity="Order",EntityId=order.Id.ToString()});
-   await db.SaveChangesAsync();return Results.Ok(order);
+   var old=order.Status;var cancelling=r.Status.Equals("Cancelled",StringComparison.OrdinalIgnoreCase);
+   if(cancelling){
+    var items=await db.OrderItems.Where(x=>x.OrderId==id).ToListAsync();
+    var productIds=items.Select(x=>x.ProductId).Distinct().ToList();
+    var products=await db.Products.Where(x=>productIds.Contains(x.Id)).ToDictionaryAsync(x=>x.Id);
+    foreach(var item in items){var qty=Math.Max(0,item.Quantity-item.ReturnedQuantity);if(qty>0&&products.TryGetValue(item.ProductId,out var product))product.Stock+=qty;}
+   }
+   order.Status=r.Status;
+   var actor=user.FindFirstValue(ClaimTypes.NameIdentifier)??user.FindFirstValue("sub")??"staff";var role=user.FindFirstValue(ClaimTypes.Role)??"";
+   db.AuditLogs.Add(new AuditLog{Id=Guid.NewGuid(),ActorId=actor,Role=role,Action=$"ORDER_STATUS_{old}_TO_{r.Status}",Entity="Order",EntityId=order.Id.ToString()});
+   if(cancelling)db.AuditLogs.Add(new AuditLog{Id=Guid.NewGuid(),ActorId=actor,Role=role,Action="ORDER_CANCELLED_STOCK_RESTORED",Entity="Order",EntityId=order.Id.ToString()});
+   await db.SaveChangesAsync();await tx.CommitAsync();return Results.Ok(order);
   }).RequireAuthorization(p=>p.RequireRole(Roles.Administrator,Roles.OrderManager));
  }
  public static string[] Next(string status)=>Allowed.TryGetValue(status,out var next)?next:[];
