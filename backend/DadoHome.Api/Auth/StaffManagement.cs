@@ -3,7 +3,7 @@ namespace DadoHome.Api.Auth;
 public record StaffCreateRequest(string Name,string Phone,string Role,string Password);
 public record StaffUpdateRequest(string Name,string Phone,string Role,bool IsActive,string? Password);
 public static class StaffManagement{
- static readonly string[] StaffRoles=[Roles.Administrator,Roles.OrderManager,Roles.Finance,Roles.Support];
+ static readonly string[] StaffRoles=[Roles.Administrator,Roles.OrderManager,Roles.Finance,Roles.Support,Roles.Cashier];
  static bool ValidRole(string role)=>StaffRoles.Contains(role,StringComparer.Ordinal);
  static Guid? UserId(ClaimsPrincipal u)=>Guid.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier)??u.FindFirstValue("sub"),out var id)?id:null;
  public static void MapStaffManagement(this WebApplication app){
@@ -16,3 +16,4 @@ public sealed class BootstrapAdminService(IServiceProvider services,IConfigurati
  public async Task StartAsync(CancellationToken ct){var phone=cfg["BootstrapAdmin:Phone"];var password=cfg["BootstrapAdmin:Password"];if(string.IsNullOrWhiteSpace(phone)||string.IsNullOrWhiteSpace(password))return;await using var scope=services.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<DadoDbContext>();if(await db.StaffUsers.AnyAsync(ct))return;var passwords=scope.ServiceProvider.GetRequiredService<PasswordService>();var name=cfg["BootstrapAdmin:Name"]?.Trim();var admin=new StaffUser{Id=Guid.NewGuid(),Name=string.IsNullOrWhiteSpace(name)?"Первый администратор":name,Phone=phone.Trim(),Role=Roles.Administrator,PasswordHash=passwords.Hash(password),IsActive=true};db.StaffUsers.Add(admin);db.AuditLogs.Add(new AuditLog{Id=Guid.NewGuid(),ActorId="bootstrap",Role=Roles.Administrator,Action="BOOTSTRAP_ADMIN_CREATED",Entity="StaffUser",EntityId=admin.Id.ToString()});await db.SaveChangesAsync(ct);log.LogInformation("Bootstrap administrator created from environment/configuration.");}
  public Task StopAsync(CancellationToken ct)=>Task.CompletedTask;
 }
+
