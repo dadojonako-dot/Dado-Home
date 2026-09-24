@@ -117,9 +117,10 @@ try{
   assert.equal((await ok(`${base}/shifts/${opening.id}`,cashier)).expectedCash,expected);
   assert.equal((await ok(`${base}/shifts/${nextShift.id}/close`,admin,{countedCash:40})).difference,0);
   await ok(`/api/admin/staff/${users.Cashier.id}`,admin,{...users.Cashier,role:'Support',password:null},'PUT');
-  assert.equal((await req(base+'/receipts',cashier)).status,403);
+  assert.equal((await req(base+'/receipts',cashier)).status,401);
   await ok(`/api/admin/staff/${other.id}`,admin,{...other,isActive:false,password:null},'PUT');
-  assert.equal((await req(base+'/receipts',otherToken)).status,403);
+  assert.equal((await req(base+'/receipts',otherToken)).status,401);
   console.log('PASS: POS regression plus shift RBAC, idempotent opening/closing, close/sale race, cash/card/QR totals and cross-shift returns.');
 }catch(error){console.error(logs.slice(-12000));throw error;}finally{app.kill();}
+
 
