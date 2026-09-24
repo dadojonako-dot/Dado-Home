@@ -36,6 +36,12 @@ try{
   const result=await ok(`/api/admin/pos/receipts/${receipt.id}/returns`,cashier,{operationId:randomUUID(),lineId:receipt.lines[0].id,quantity:1});assert.equal(result.status,'PartiallyReturned');
   assert.equal((await request('/api/admin/pos/sales',finance,sale)).status,403);
   for(const token of [manager,support])assert.equal((await request('/api/admin/pos/receipts',token)).status,403);
+  const expense={id:randomUUID(),date:'2026-09-25',amount:75.50,category:'Транспорт',description:'Тест комплекта: доставка в магазин'};
+  await ok('/api/admin/expenses',admin,expense);
+  assert.equal((await ok('/api/admin/expenses',finance)).total,75.50);
+  assert.equal((await request('/api/admin/expenses',finance,{...expense,id:randomUUID()})).status,403);
+  for(const token of [cashier,manager,support])assert.equal((await request('/api/admin/expenses',token)).status,403);
+  assert.equal((await request('/api/auth/otp/request',null,{phone:'+992900001111'})).status,503);
   script('Start.ps1'); // repeated start must reuse the running instance
   script('Stop.ps1');
   script('Start.ps1');
@@ -45,6 +51,11 @@ try{
   assert.equal((await ok('/api/products')).find(p=>p.id===mug.id).stock,mug.stock-1);
   assert.equal((await ok('/api/admin/staff',await login(1,'Administrator'))).length,5);
   assert.equal((await ok('/api/products')).length,8);
+  const adminAgain=await login(1,'Administrator');
+  const expenses=await ok('/api/admin/expenses',adminAgain);
+  assert.equal(expenses.total,75.50);assert.equal(expenses.items[0].id,expense.id);
+  await ok(`/api/admin/expenses/${expense.id}/cancel`,adminAgain,{reason:'Проверка отмены'});
+  assert.equal((await ok('/api/admin/expenses',adminAgain)).total,0);
   console.log('PASS: standalone Windows startup, same-origin frontend, five roles, demo catalog, sale/return, repeated start, restart persistence and idempotency.');
 }catch(error){
   if(error.stdout)console.error(error.stdout.toString());

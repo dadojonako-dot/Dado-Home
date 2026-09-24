@@ -31,6 +31,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $destination 'postgres') | 
 foreach($folder in @('bin','lib','share')){Copy-Item -LiteralPath (Join-Path $PostgresRoot $folder) -Destination (Join-Path $destination "postgres\$folder") -Recurse}
 New-Item -ItemType Directory -Force -Path (Join-Path $destination 'docs') | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'docs\POS.md') -Destination (Join-Path $destination 'docs\POS.md')
+foreach($name in @('SECURITY.md','EXPENSES.md')){Copy-Item -LiteralPath (Join-Path $repo "docs\$name") -Destination (Join-Path $destination "docs\$name")}
 Copy-Item -LiteralPath (Join-Path $PostgresRoot 'doc\postgresql\html\legalnotice.html') -Destination (Join-Path $destination 'docs\PostgreSQL-license.html')
 if($VcRedist){
     $signature=Get-AuthenticodeSignature -LiteralPath $VcRedist
