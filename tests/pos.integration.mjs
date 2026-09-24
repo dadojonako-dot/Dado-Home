@@ -34,6 +34,17 @@ try{
   const p=await product(),empty=await product(0);
   const payload=(items,extra={})=>({operationId:randomUUID(),items,paymentMethod:'Cash',tendered:100,heldReceiptId:null,...extra});
   const stock=async(id)=>(await ok('/api/products',null)).find(p=>p.id===id).stock;
+  assert.equal((await req(base+'/sales',cashier,payload([{productId:p.id,quantity:1}]))).status,409);
+  const opening={id:randomUUID(),openingCash:100};
+  const opened=await Promise.all([ok(base+'/shifts',cashier,opening),ok(base+'/shifts',cashier,opening)]);
+  assert.equal(opened[0].id,opened[1].id);
+  assert.equal((await req(base+'/shifts',cashier,{...opening,openingCash:90})).status,409);
+  assert.equal((await req(base+'/shifts',cashier,{id:randomUUID(),openingCash:0})).status,409);
+  for(const role of ['Finance','OrderManager','Support']){
+    assert.equal((await req(base+'/shifts',accounts[role],{id:randomUUID(),openingCash:0})).status,403);
+    assert.equal((await req(`${base}/shifts/${opening.id}/close`,accounts[role],{countedCash:100})).status,403);
+  }
+  for(const role of ['OrderManager','Support'])assert.equal((await req(base+'/shifts',accounts[role])).status,403);
   for(const role of ['OrderManager','Support']){
     for(const endpoint of ['/receipts','/report'])assert.equal((await req(base+endpoint,accounts[role])).status,403);
   }
@@ -59,6 +70,8 @@ try{
   assert.equal((await ok(`${base}/receipts/${receipt.id}`,accounts.Finance)).receipt.id,receipt.id);
   const other=await ok('/api/admin/staff',admin,{name:'Other',phone:randomUUID(),role:'Cashier',password});
   const otherToken=(await ok('/api/admin/auth/login',null,{phone:other.phone,password})).accessToken;
+  assert.equal((await req(`${base}/shifts/${opening.id}`,otherToken)).status,404);
+  assert.equal((await req(`${base}/shifts/${opening.id}/close`,otherToken,{countedCash:100})).status,404);
   assert.equal((await req(`${base}/receipts/${receipt.id}`,otherToken)).status,404);
   const ret={operationId:randomUUID(),lineId:receipt.lines[0].id,quantity:2};
   const returned=await ok(`${base}/receipts/${receipt.id}/returns`,cashier,ret);
@@ -80,10 +93,33 @@ try{
   assert.deepEqual(race.map(x=>x.status).sort(),[200,409]);assert.equal(await stock(last.id),0);
   const report=await ok(base+'/report',accounts.Finance);assert.equal(report.gross,60);assert.equal(report.returned,30);assert.equal(report.net,30);
   const audit=await ok('/api/audit',admin);assert.equal(audit.filter(x=>x.action==='POS_SALE_COMPLETED').length,3);assert.equal(audit.filter(x=>x.action==='POS_RETURN_COMPLETED').length,2);
+  const totals=await ok(`${base}/shifts/${opening.id}`,accounts.Finance);
+  assert.equal(totals.cash,60);assert.equal(totals.cashReturns,30);assert.equal(totals.expectedCash,130);
+  const closingRace=await Promise.all([
+    req(base+'/sales',cashier,payload([{productId:p.id,quantity:1}],{tendered:10})),
+    req(`${base}/shifts/${opening.id}/close`,cashier,{countedCash:130})
+  ]);
+  assert.equal(closingRace[1].status,200);assert.ok([200,409].includes(closingRace[0].status));
+  const expected=closingRace[0].status===200?140:130;
+  assert.equal(closingRace[1].data.expectedCash,expected);
+  assert.equal(closingRace[1].data.difference,130-expected);
+  assert.equal((await ok(`${base}/shifts/${opening.id}/close`,cashier,{countedCash:130})).expectedCash,expected);
+  assert.equal((await req(`${base}/shifts/${opening.id}/close`,cashier,{countedCash:131})).status,409);
+  assert.equal((await req(base+'/sales',cashier,payload([{productId:p.id,quantity:1}]))).status,409);
+  assert.equal((await ok(base+'/sales',cashier,sale)).id,receipt.id); // replay remains possible after close
+  const nextShift=await ok(base+'/shifts',cashier,{id:randomUUID(),openingCash:50});
+  await ok(`${base}/receipts/${completed.id}/returns`,cashier,{operationId:randomUUID(),lineId:completed.lines[0].id,quantity:1});
+  const cardSale=await ok(base+'/sales',cashier,payload([{productId:p.id,quantity:1}],{paymentMethod:'Card',tendered:10}));
+  await ok(`${base}/receipts/${cardSale.id}/returns`,cashier,{operationId:randomUUID(),lineId:cardSale.lines[0].id,quantity:1});
+  await ok(base+'/sales',cashier,payload([{productId:p.id,quantity:1}],{paymentMethod:'QR',tendered:10}));
+  const nextTotals=await ok(`${base}/shifts/${nextShift.id}`,cashier);
+  assert.equal(nextTotals.expectedCash,40);assert.equal(nextTotals.card,10);assert.equal(nextTotals.cardReturns,10);assert.equal(nextTotals.qr,10);
+  assert.equal((await ok(`${base}/shifts/${opening.id}`,cashier)).expectedCash,expected);
+  assert.equal((await ok(`${base}/shifts/${nextShift.id}/close`,admin,{countedCash:40})).difference,0);
   await ok(`/api/admin/staff/${users.Cashier.id}`,admin,{...users.Cashier,role:'Support',password:null},'PUT');
   assert.equal((await req(base+'/receipts',cashier)).status,403);
   await ok(`/api/admin/staff/${other.id}`,admin,{...other,isActive:false,password:null},'PUT');
   assert.equal((await req(base+'/receipts',otherToken)).status,403);
-  console.log('PASS: RBAC, current-role/disabled-user checks, ownership, atomic rollback, sale and return concurrency, idempotency, held lifecycle, reports, audit, card-field rejection.');
+  console.log('PASS: POS regression plus shift RBAC, idempotent opening/closing, close/sale race, cash/card/QR totals and cross-shift returns.');
 }catch(error){console.error(logs.slice(-12000));throw error;}finally{app.kill();}
 

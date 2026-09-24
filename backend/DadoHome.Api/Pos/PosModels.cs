@@ -6,6 +6,7 @@ namespace DadoHome.Api.Pos;
 public class PosReceipt
 {
     public Guid Id { get; set; }
+    public Guid? ShiftId { get; set; }
     public Guid CashierId { get; set; }
     public string Number { get; set; } = "";
     public string Status { get; set; } = "Held";
@@ -29,6 +30,7 @@ public class PosLine
 public class PosReturn
 {
     public Guid Id { get; set; }
+    public Guid? ShiftId { get; set; }
     public Guid ReceiptId { get; set; }
     public Guid LineId { get; set; }
     public Guid ActorId { get; set; }
@@ -55,6 +57,14 @@ public static class PosModelConfiguration
 {
     public static void ConfigurePos(this ModelBuilder b)
     {
+        b.Entity<PosShift>().ToTable("PosShifts");
+        b.Entity<PosShift>().HasIndex(x => x.CashierId).IsUnique().HasFilter("\"ClosedAt\" IS NULL");
+        b.Entity<PosShift>().Property(x => x.OpeningCash).HasPrecision(18, 2);
+        b.Entity<PosShift>().Property(x => x.CountedCash).HasPrecision(18, 2);
+        b.Entity<PosShift>().Property(x => x.ExpectedCash).HasPrecision(18, 2);
+        b.Entity<PosShift>().Property(x => x.Difference).HasPrecision(18, 2);
+        b.Entity<PosReceipt>().HasOne<PosShift>().WithMany().HasForeignKey(x => x.ShiftId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<PosReturn>().HasOne<PosShift>().WithMany().HasForeignKey(x => x.ShiftId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<PosReceipt>().ToTable("PosReceipts");
         b.Entity<PosReceipt>().HasIndex(x => x.Number).IsUnique();
         b.Entity<PosReceipt>().HasIndex(x => new { x.CashierId, x.CreatedAt });

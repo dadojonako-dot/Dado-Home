@@ -45,6 +45,7 @@ public static class PosEndpoints
             return Results.Ok(new { from = start, to = end, count = await sold.CountAsync(), gross, returned, net = gross - returned, currency = "TJS" });
         }).RequireAuthorization(p => p.RequireRole(Roles.Administrator, Roles.Finance));
         group.MapPost("/sales", (PosWrite r, DadoDbContext db, ClaimsPrincipal u) => Write(db, u, r, false)).RequireAuthorization(p => p.RequireRole(Roles.Administrator, Roles.Cashier));
+        group.MapShifts();
         group.MapPost("/held", (PosWrite r, DadoDbContext db, ClaimsPrincipal u) => Write(db, u, r, true)).RequireAuthorization(p => p.RequireRole(Roles.Administrator, Roles.Cashier));
         group.MapPost("/receipts/{id:guid}/returns", Return).RequireAuthorization(p => p.RequireRole(Roles.Administrator, Roles.Cashier));
         group.MapDelete("/held/{id:guid}", async (Guid id, DadoDbContext db, ClaimsPrincipal u) =>
@@ -88,6 +89,7 @@ public static class PosEndpoints
         var fingerprint = Fingerprint(new { held, request = r });
         var replay = await Replay(db, u, r.OperationId, fingerprint);
         if (replay is not null) return Results.Ok(replay);
+        var shift = held ? null : await PosShifts.RequireOpen(db, u);
         PosReceipt receipt;
         if (r.HeldReceiptId is Guid existing)
         {
@@ -122,6 +124,7 @@ public static class PosEndpoints
         receipt.Tendered = held ? 0 : r.Tendered;
         receipt.Status = held ? "Held" : "Sold";
         receipt.SoldAt = held ? null : DateTime.UtcNow;
+        receipt.ShiftId = shift?.Id;
         db.Add(new PosOperation { Id = r.OperationId, ActorId = Actor(u), Fingerprint = fingerprint, ReceiptId = receipt.Id });
         Audit(db, u, receipt.Id, held ? "POS_HELD_SAVED" : "POS_SALE_COMPLETED");
         await db.SaveChangesAsync(); await tx.CommitAsync();
@@ -134,6 +137,7 @@ public static class PosEndpoints
         var fingerprint = Fingerprint(new { returnReceipt = id, request = r });
         var replay = await Replay(db, u, r.OperationId, fingerprint);
         if (replay is not null) return Results.Ok(replay);
+        var shift = await PosShifts.RequireOpen(db, u);
         await Lock(db, id);
         var receipt = await Visible(db, u).Include(x => x.Lines).SingleOrDefaultAsync(x => x.Id == id);
         if (receipt is null) return Results.NotFound();
@@ -143,7 +147,7 @@ public static class PosEndpoints
         await db.Products.Where(x => x.Id == line.ProductId).ExecuteUpdateAsync(s => s.SetProperty(x => x.Stock, x => x.Stock + r.Quantity));
         line.ReturnedQuantity += r.Quantity;
         receipt.Status = receipt.Lines.All(x => x.ReturnedQuantity == x.Quantity) ? "Returned" : "PartiallyReturned";
-        db.Add(new PosReturn { Id = Guid.NewGuid(), ReceiptId = id, LineId = line.Id, ActorId = Actor(u), Quantity = r.Quantity, Amount = r.Quantity * line.UnitPrice });
+        db.Add(new PosReturn { Id = Guid.NewGuid(), ShiftId = shift.Id, ReceiptId = id, LineId = line.Id, ActorId = Actor(u), Quantity = r.Quantity, Amount = r.Quantity * line.UnitPrice });
         db.Add(new PosOperation { Id = r.OperationId, ActorId = Actor(u), Fingerprint = fingerprint, ReceiptId = id });
         Audit(db, u, id, "POS_RETURN_COMPLETED");
         await db.SaveChangesAsync(); await tx.CommitAsync();

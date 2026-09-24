@@ -28,6 +28,8 @@ try{
   const staff=await ok('/api/admin/staff',admin);assert.equal(staff.length,5);
   const products=await ok('/api/products');assert.equal(products.length,8);
   const mug=products.find(p=>p.name==='Кружка керамическая');
+  const current=await ok('/api/admin/pos/shifts/current',cashier);
+  if(!current.shift)await ok('/api/admin/pos/shifts',cashier,{id:randomUUID(),openingCash:0});
   const sale={operationId:randomUUID(),items:[{productId:mug.id,quantity:2}],paymentMethod:'Cash',tendered:100,heldReceiptId:null};
   const receipt=await ok('/api/admin/pos/sales',cashier,sale);assert.equal(receipt.total,70);
   assert.equal((await ok('/api/products')).find(p=>p.id===mug.id).stock,mug.stock-2);
