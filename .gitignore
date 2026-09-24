@@ -4,3 +4,7 @@
 **/dist/
 .env
 .env.local
+
+artifacts/
+pilot/windows/runtime/
+
